@@ -167,6 +167,14 @@ class WarlockClient {
         });
         return await res.json();
     }
+    async getAllServices() {
+        const url = `${this.baseUrl}/api/services`;
+        const res = await this.request(url, {
+            method: 'GET',
+            headers: this.getHeaders()
+        });
+        return await res.json();
+    }
 }
 exports.WarlockClient = WarlockClient;
 //# sourceMappingURL=warlockClient.js.map

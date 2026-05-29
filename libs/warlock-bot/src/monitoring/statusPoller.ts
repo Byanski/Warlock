@@ -42,7 +42,7 @@ export class StatusPoller {
       }
 
       for (const serviceObj of response.services) {
-        const gameName = (serviceObj.name || serviceObj.service).toLowerCase();
+        const gameName = serviceObj.service.toLowerCase();
         
         // Cache the identifiers for command handling
         this.serviceCache[gameName] = {
@@ -107,9 +107,9 @@ export class StatusPoller {
       
       const labels = (hist || []).map(h => h.time);
       const dataPoints = (hist || []).map(h => h.count);
-      const chartUrl = ChartGenerator.generatePlayerChart(labels, dataPoints, gameName);
+      const chartUrl = ChartGenerator.generatePlayerChart(labels, dataPoints, serviceData.name || gameName);
 
-      let titleStr = `🎮 ${gameName.toUpperCase()} Server Status`;
+      let titleStr = `🎮 ${(serviceData.name || gameName).toUpperCase()} Server Status`;
       if (justFailed) titleStr += ` [API DISCONNECTED]`;
       if (isRecovering) titleStr += ` [API RESTORED]`;
 

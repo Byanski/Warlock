@@ -3,10 +3,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.CommandHandler = void 0;
 const warlockClient_1 = require("../api/warlockClient");
 class CommandHandler {
-    schemaLoader;
     client;
-    constructor(schemaLoader) {
-        this.schemaLoader = schemaLoader;
+    constructor() {
         this.client = new warlockClient_1.WarlockClient();
     }
     async handleMessage(messageContent, callbacks, poller) {
@@ -19,49 +17,31 @@ class CommandHandler {
         if (parts.length < 2) {
             return '❌ Invalid syntax. Use: `!w <game_name> <command> [args]`';
         }
-        const gameName = parts[0];
-        const apiCommand = parts[1];
+        const gameName = (parts[0] || '').toLowerCase();
+        const apiCommand = (parts[1] || '').toLowerCase();
         const args = parts.slice(2).join(' ');
-        const schema = this.schemaLoader.getSchema();
-        if (!schema[gameName]) {
-            return `❌ Game \`${gameName}\` is not registered in the Warlock config.`;
+        if (!poller) {
+            return `❌ Bot is still initializing, please try again.`;
         }
-        const gameSchema = schema[gameName];
-        if (!gameSchema) {
-            return `❌ Game \`${gameName}\` is not properly configured.`;
+        const serviceDef = poller.getServiceByName(gameName);
+        if (!serviceDef) {
+            return `❌ Game \`${gameName}\` is not active on Warlock. (Wait a moment if you just started it)`;
         }
-        const gameDef = gameSchema.commands[apiCommand];
-        if (!gameDef) {
-            return `❌ Command \`${apiCommand}\` is not registered for \`${gameName}\`.`;
-        }
-        if (gameDef.requires_args && !args) {
-            return `❌ Command \`${apiCommand}\` requires arguments.`;
-        }
-        if (gameDef.requires_args && gameDef.args_regex) {
-            const regex = new RegExp(gameDef.args_regex);
-            if (!regex.test(args)) {
-                return `❌ Invalid arguments provided for \`${apiCommand}\`. Failed security validation.`;
-            }
-        }
-        const guid = gameSchema.guid;
-        const serviceName = gameSchema.service_name;
-        const hostId = process.env.WARLOCK_TARGET_HOST || 'local'; // Using a designated host ID
+        const { guid, host, service } = serviceDef;
         try {
-            if (gameDef.type === 'control') {
-                const action = gameDef.action;
-                if (callbacks && poller && (action === 'start' || action === 'stop')) {
-                    const overrideState = action === 'start' ? 'Starting...' : 'Stopping...';
+            if (apiCommand === 'start' || apiCommand === 'stop' || apiCommand === 'restart') {
+                const overrideState = apiCommand === 'start' ? 'Starting...' : (apiCommand === 'stop' ? 'Stopping...' : 'Restarting...');
+                if (callbacks && poller) {
                     poller.setOverrideStatus(gameName, overrideState);
-                    const msgId = await callbacks.reply({ content: `⏳ Server is ${action}ing...` });
-                    await this.client.controlService(guid, hostId, serviceName, action);
+                    const msgId = await callbacks.reply({ content: `⏳ Server is ${overrideState.toLowerCase()}` });
+                    await this.client.controlService(guid, host, service, apiCommand);
                     if (msgId) {
-                        // Poll briefly to wait for status to update
-                        const targetStatus = action === 'start' ? 'running' : 'stopped';
+                        const targetStatus = apiCommand === 'stop' ? 'stopped' : 'running';
                         let reachedTarget = false;
-                        for (let i = 0; i < 15; i++) { // Poll 15 times (30s)
+                        for (let i = 0; i < 15; i++) {
                             await new Promise(r => setTimeout(r, 2000));
                             try {
-                                const details = await this.client.getServiceDetails(guid, hostId, serviceName);
+                                const details = await this.client.getServiceDetails(guid, host, service);
                                 const currentStatus = details.service ? details.service.status : details.status;
                                 if (currentStatus === targetStatus || (targetStatus === 'running' && currentStatus === 'ONLINE') || (targetStatus === 'stopped' && currentStatus === 'OFFLINE')) {
                                     reachedTarget = true;
@@ -70,41 +50,49 @@ class CommandHandler {
                             }
                             catch (e) {
                                 if (targetStatus === 'stopped') {
-                                    reachedTarget = true; // Error usually means it's offline
+                                    reachedTarget = true;
                                     break;
                                 }
                             }
                         }
-                        poller.setOverrideStatus(gameName, null);
                         if (reachedTarget) {
-                            await callbacks.editReply(msgId, { content: `✅ Server is ${action === 'start' ? 'started' : 'stopped'}!` });
+                            await callbacks.editReply(msgId, { content: `✅ Server is now ${targetStatus}.` });
                         }
                         else {
-                            await callbacks.editReply(msgId, { content: `⚠️ Command sent, but timed out waiting for status confirmation.` });
+                            await callbacks.editReply(msgId, { content: `⚠️ Command sent, but API timed out waiting for status change.` });
                         }
-                        setTimeout(() => callbacks.deleteReply(msgId), 7000);
+                        poller.setOverrideStatus(gameName, null);
+                        setTimeout(async () => {
+                            await callbacks.deleteReply(msgId);
+                        }, 7000);
                     }
-                    return null; // Don't return standard response since we handled it
                 }
-                await this.client.controlService(guid, hostId, serviceName, action);
-                return `✅ **Success:** Sent \`${action}\` command to ${gameName}.`;
+                return null; // Return null since we handled replies manually
             }
-            else if (gameDef.type === 'custom') {
-                const commandTemplate = gameDef.command;
-                const cmdStr = commandTemplate.replace('{args}', args);
-                const result = await this.client.customCommand(guid, hostId, serviceName, cmdStr);
-                let response = `✅ **Execution Success for \`${gameName} ${apiCommand}\`**\n\`\`\`text\n`;
-                response += result.trim() ? result.trim() : 'Command executed.';
-                response += '\n```';
-                return response;
+            else {
+                // It's a custom command (e.g. save, broadcast)
+                // Send it directly to Warlock's service console
+                if (callbacks) {
+                    const msgId = await callbacks.reply({ content: `⏳ Executing \`${apiCommand} ${args}\`...` });
+                    const responseText = await this.client.customCommand(guid, host, service, `${apiCommand} ${args}`.trim());
+                    let cleanOutput = responseText.replace(/<[^>]*>?/gm, '').trim();
+                    if (cleanOutput.length > 1900) {
+                        cleanOutput = cleanOutput.substring(0, 1900) + '...';
+                    }
+                    if (cleanOutput) {
+                        await callbacks.editReply(msgId, { content: `**Output:**\n\`\`\`\n${cleanOutput}\n\`\`\`` });
+                    }
+                    else {
+                        await callbacks.editReply(msgId, { content: `✅ Command executed successfully.` });
+                    }
+                    return null;
+                }
             }
-            return `❌ Unknown command type in schema.`;
         }
-        catch (e) {
-            if (poller)
-                poller.setOverrideStatus(gameName, null);
-            return `❌ **Execution Failed**\n\`\`\`text\n${e.message}\n\`\`\``;
+        catch (err) {
+            return `❌ API Error: ${err.message}`;
         }
+        return null;
     }
 }
 exports.CommandHandler = CommandHandler;

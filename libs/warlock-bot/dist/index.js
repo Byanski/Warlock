@@ -42,20 +42,16 @@ if (!globalThis.File) {
     globalThis.File = buffer_1.File;
 }
 const path = __importStar(require("path"));
-const loader_1 = require("./schema/loader");
 const commandHandler_1 = require("./execution/commandHandler");
 const statusPoller_1 = require("./monitoring/statusPoller");
 const core_1 = require("@discordjs/core");
 const rest_1 = require("@discordjs/rest");
 const ws_1 = require("@discordjs/ws");
+const fs = __importStar(require("fs"));
 dotenv.config();
 console.log('[App] Starting Bot for Warlock...');
-// 1. Load the dynamic route configuration
-const schemaPath = path.join(__dirname, '..', 'game_commands.json');
-const schemaLoader = new loader_1.SchemaLoader(schemaPath);
-schemaLoader.load();
-// 2. Initialize the Command Handler
-const commandHandler = new commandHandler_1.CommandHandler(schemaLoader);
+// Initialize the Command Handler
+const commandHandler = new commandHandler_1.CommandHandler();
 const platforms = [];
 if (process.env.FLUXER_TOKEN) {
     platforms.push({
@@ -72,7 +68,6 @@ if (process.env.DISCORD_TOKEN) {
         isDiscord: true
     });
 }
-const fs = __importStar(require("fs"));
 // Helper functions to send/edit/delete messages via REST
 async function sendMessage(platform, channelId, payload) {
     try {
@@ -154,7 +149,7 @@ function saveState() {
         console.error('[App] Failed to save state:', e);
     }
 }
-// 3. Start the Status Poller
+// Start the Status Poller
 const poller = new statusPoller_1.StatusPoller(async (gameName, embedPayload) => {
     if (!messageState[gameName])
         messageState[gameName] = {};
@@ -176,14 +171,8 @@ const poller = new statusPoller_1.StatusPoller(async (gameName, embedPayload) =>
         }
     }
 });
-// Start polling for all loaded game configurations
-const schema = schemaLoader.getSchema();
-for (const gameName in schema) {
-    const gameConfig = schema[gameName];
-    if (gameConfig) {
-        poller.startPolling(gameName, gameConfig.guid, gameConfig.service_name, 'ignored', 30000); // Poll every 30s
-    }
-}
+// Kick off dynamic polling immediately!
+poller.startPolling(30000); // 30s interval
 function connectGateway(platform) {
     const restOptions = { version: platform.isDiscord ? '10' : '1' };
     if (!platform.isDiscord) {
@@ -209,7 +198,6 @@ function connectGateway(platform) {
                     return;
                 }
             }
-            // Instead of just passing a string, we want the CommandHandler to be able to send, edit, and delete replies, and override poller status
             const responseText = await commandHandler.handleMessage(message.content, {
                 reply: async (payload) => {
                     const id = await sendMessage(platform, message.channel_id, payload);
