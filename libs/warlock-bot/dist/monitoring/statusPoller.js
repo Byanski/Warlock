@@ -40,6 +40,9 @@ class StatusPoller {
         }
         return undefined;
     }
+    getAllKnownServices() {
+        return Object.values(this.serviceCache);
+    }
     async pollAllServices(intervalMs = 30000) {
         try {
             // console.log(`[StatusPoller] Fetching all services from Warlock API...`);
