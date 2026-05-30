@@ -1,7 +1,7 @@
 export declare class PalworldClient {
     private baseUrl;
     private authHeader;
-    constructor(ip: string, port: number, adminPassword: string);
+    constructor(ip: string, port: number, adminPassword: string, useHttps?: boolean);
     private request;
     info(): Promise<any>;
     metrics(): Promise<any>;

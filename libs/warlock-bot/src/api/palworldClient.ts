@@ -2,8 +2,9 @@ export class PalworldClient {
   private baseUrl: string;
   private authHeader: string;
 
-  constructor(ip: string, port: number, adminPassword: string) {
-    this.baseUrl = `http://${ip}:${port}/v1/api`;
+  constructor(ip: string, port: number, adminPassword: string, useHttps: boolean = false) {
+    const protocol = useHttps ? 'https' : 'http';
+    this.baseUrl = `${protocol}://${ip}:${port}/v1/api`;
     const token = Buffer.from(`admin:${adminPassword}`).toString('base64');
     this.authHeader = `Basic ${token}`;
   }

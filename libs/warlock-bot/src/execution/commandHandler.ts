@@ -305,7 +305,10 @@ export class CommandHandler {
               const detailsData = await this.client.getServiceDetails(guid, host, service);
               const serverIp = detailsData.service?.ip || '127.0.0.1';
 
-              const pwClient = new PalworldClient(serverIp, restPort, adminPassword);
+              const useHttpsConfig = configs.configs?.find((c: any) => c.option === 'Use HTTPS' || c.option === 'REST API HTTPS');
+              const useHttps = useHttpsConfig?.value === 'true' || useHttpsConfig?.value === true;
+
+              const pwClient = new PalworldClient(serverIp, restPort, adminPassword, useHttps);
 
               // 3. Execute command
               let result: any;
