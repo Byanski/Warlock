@@ -11,6 +11,7 @@ export declare class WarlockClient {
     controlService(guid: string, host: string, service: string, action: string): Promise<any>;
     customCommand(guid: string, host: string, service: string, command: string): Promise<any>;
     getServiceDetails(guid: string, host: string, service: string): Promise<any>;
+    getServiceConfigs(guid: string, host: string, service: string): Promise<any>;
     getAllServices(): Promise<any>;
 }
 //# sourceMappingURL=warlockClient.d.ts.map

@@ -28,8 +28,27 @@ export class StatusPoller {
     this.lastStatus[gameName] = ''; 
   }
 
-  public getServiceByName(gameName: string): ServiceInstance | undefined {
-    return this.serviceCache[gameName.toLowerCase()];
+  public getServiceByName(name: string): ServiceInstance | undefined {
+    if (!name) return undefined;
+    const lowerName = name.toLowerCase();
+    
+    if (this.serviceCache[lowerName]) {
+      return this.serviceCache[lowerName];
+    }
+    
+    // Fuzzy search
+    for (const key of Object.keys(this.serviceCache)) {
+      if (key.includes(lowerName)) {
+        return this.serviceCache[key];
+      }
+      
+      const svc = this.serviceCache[key];
+      if (svc && svc.name && svc.name.toLowerCase().includes(lowerName)) {
+        return svc;
+      }
+    }
+    
+    return undefined;
   }
 
   public async pollAllServices(intervalMs: number = 30000) {
@@ -66,7 +85,17 @@ export class StatusPoller {
 
   private async processServiceStatus(gameName: string, serviceData: any) {
     try {
-      let status = serviceData.status || 'UNKNOWN';
+      let metrics: any = {};
+      try {
+        metrics = await this.client.getServiceDetails(serviceData.guid, serviceData.host, serviceData.service);
+      } catch (err: any) {
+        console.error(`[StatusPoller] Failed to get metrics for ${gameName}:`, err.message);
+      }
+      
+      // The API often returns the metrics directly or nested in .service
+      const details = metrics.service ? metrics.service : metrics;
+
+      let status = details.status || 'UNKNOWN';
       let isRecovering = false;
       const prevFailures = this.failures[gameName] || 0;
       
@@ -82,10 +111,10 @@ export class StatusPoller {
 
       let playerCount = 0;
       if (status === 'running' || status === 'ONLINE') {
-        if (serviceData.player_count !== undefined) {
-          playerCount = serviceData.player_count;
-        } else if (serviceData.players && Array.isArray(serviceData.players)) {
-          playerCount = serviceData.players.length;
+        if (details.player_count !== undefined) {
+          playerCount = details.player_count;
+        } else if (details.players && Array.isArray(details.players)) {
+          playerCount = details.players.length;
         }
       }
 
@@ -105,41 +134,63 @@ export class StatusPoller {
 
       const justFailed = prevFailures === 1;
       
-      const labels = (hist || []).map(h => h.time);
-      const dataPoints = (hist || []).map(h => h.count);
-      const chartUrl = ChartGenerator.generatePlayerChart(labels, dataPoints, serviceData.name || gameName);
+      let showGraph = false;
+      try {
+        const stateFile = require('path').join(__dirname, '..', '..', 'data', 'graphState.json');
+        if (require('fs').existsSync(stateFile)) {
+          const state = JSON.parse(require('fs').readFileSync(stateFile, 'utf8'));
+          if (state.showGlobalGraph === true) {
+            showGraph = true;
+          }
+        } else {
+          // Default to reading from warlock config if global state isn't set
+          const configs = await this.client.getServiceConfigs(serviceData.guid, serviceData.host, serviceData.service);
+          const graphConfig = configs.configs?.find((c: any) => c.option === 'Show Graph' || c.option === 'ShowGraph');
+          if (graphConfig && (graphConfig.value === 'true' || graphConfig.value === 'yes' || graphConfig.value === '1' || graphConfig.value === 'on')) {
+            showGraph = true;
+          }
+        }
+      } catch (err) {
+        // Ignore errors fetching config
+      }
+
+      let chartUrl: string | undefined = undefined;
+      if (showGraph) {
+        const labels = (hist || []).map(h => h.time);
+        const dataPoints = (hist || []).map(h => h.count);
+        chartUrl = ChartGenerator.generatePlayerChart(labels, dataPoints, serviceData.name || gameName);
+      }
 
       let titleStr = `🎮 ${(serviceData.name || gameName).toUpperCase()} Server Status`;
       if (justFailed) titleStr += ` [API DISCONNECTED]`;
       if (isRecovering) titleStr += ` [API RESTORED]`;
 
       let descriptionText = `**Status:** ${status === 'running' || status === 'ONLINE' ? '🟢 Online' : (status === 'OFFLINE' ? '🔴 Offline' : `🟡 ${status}`)}\n`;
-      let embedFields: any[] = [];
 
       if (status === 'running' || status === 'ONLINE') {
          const ipPort = serviceData.ip ? `${serviceData.ip}:${serviceData.port || ''}` : 'Unknown';
-         const players = serviceData.player_count !== undefined ? `${serviceData.player_count}/${serviceData.max_players || '?'}` : '0';
-         const memory = serviceData.memory_usage ? (serviceData.memory_usage > 1024 ? `${(serviceData.memory_usage / 1024).toFixed(2)} GB` : `${serviceData.memory_usage} MB`) : 'N/A';
-         const cpu = serviceData.cpu_usage !== undefined ? `${serviceData.cpu_usage}%` : 'N/A';
-         const responseTime = serviceData.response_time || 'N/A';
+         const players = details.player_count !== undefined ? `${details.player_count}/${serviceData.max_players || '?'}` : '0';
+         const memory = details.memory_usage ? (details.memory_usage > 1024 ? `${(details.memory_usage / 1024).toFixed(2)} GB` : `${details.memory_usage} MB`) : 'N/A';
+         const cpu = details.cpu_usage !== undefined ? `${details.cpu_usage}%` : 'N/A';
+         const responseTime = details.response_time || 'N/A';
 
-         embedFields = [
-           { name: '🔌 Connection', value: `\`${ipPort}\``, inline: true },
-           { name: '👥 Players', value: `\`${players}\``, inline: true },
-           { name: '⏱️ Ping', value: `\`${responseTime}\``, inline: true },
-           { name: '🧠 Memory', value: `\`${memory}\``, inline: true },
-           { name: '⚙️ CPU', value: `\`${cpu}\``, inline: true },
-           { name: '🎮 Server', value: `\`${serviceData.name || gameName}\``, inline: true }
-         ];
+         descriptionText += `\n**🔌 Connect:** \`${ipPort}\``;
+         descriptionText += `\n**👥 Players:** \`${players}\`  |  **⏱️ Ping:** \`${responseTime}\``;
+         descriptionText += `\n**🧠 RAM:** \`${memory}\`  |  **⚙️ CPU:** \`${cpu}\``;
+      }
+      
+      let embedColor = status === 'ONLINE' || status === 'running' ? 0x57F287 : 0xED4245;
+      const themeColor = process.env.THEME_COLOR || process.env.EMBED_COLOR;
+      if (themeColor) {
+        embedColor = parseInt(themeColor.replace('#', ''), 16) || embedColor;
       }
 
       const embedPayload = {
         embeds: [{
           title: titleStr,
           description: descriptionText,
-          fields: embedFields.length > 0 ? embedFields : undefined,
-          color: status === 'ONLINE' || status === 'running' ? 0x57F287 : 0xED4245,
-          image: { url: chartUrl },
+          color: embedColor,
+          image: chartUrl ? { url: chartUrl } : undefined,
           footer: { text: 'Warlock Monitor' },
           timestamp: new Date().toISOString()
         }]

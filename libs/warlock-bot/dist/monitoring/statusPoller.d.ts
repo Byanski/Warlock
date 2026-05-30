@@ -16,7 +16,7 @@ export declare class StatusPoller {
     private serviceCache;
     constructor(postEmbedCallback: (gameName: string, embedPayload: any) => Promise<void>);
     setOverrideStatus(gameName: string, status: string | null): void;
-    getServiceByName(gameName: string): ServiceInstance | undefined;
+    getServiceByName(name: string): ServiceInstance | undefined;
     pollAllServices(intervalMs?: number): Promise<void>;
     private processServiceStatus;
     startPolling(intervalMs?: number): void;

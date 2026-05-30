@@ -35,6 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.editMessage = editMessage;
 exports.deleteMessage = deleteMessage;
+exports.purgeMessages = purgeMessages;
 const dotenv = __importStar(require("dotenv"));
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 const buffer_1 = require("buffer");
@@ -127,6 +128,60 @@ async function deleteMessage(platform, channelId, messageId) {
         return false;
     }
 }
+async function purgeMessages(platform, channelId, limit) {
+    try {
+        let remaining = limit;
+        let lastMessageId = undefined;
+        while (remaining > 0) {
+            const fetchLimit = Math.min(remaining, 100);
+            let query = `limit=${fetchLimit}`;
+            if (lastMessageId)
+                query += `&before=${lastMessageId}`;
+            const url = platform.isDiscord
+                ? `https://discord.com/api/v10/channels/${channelId}/messages?${query}`
+                : `https://api.fluxer.app/v1/channels/${channelId}/messages?${query}`;
+            const res = await fetch(url, {
+                method: 'GET',
+                headers: { 'Authorization': `Bot ${platform.token}` }
+            });
+            if (!res.ok)
+                break;
+            const messages = await res.json();
+            if (!Array.isArray(messages) || messages.length === 0)
+                break;
+            const messageIds = messages.map((m) => m.id);
+            lastMessageId = messageIds[messageIds.length - 1];
+            if (platform.isDiscord && messageIds.length > 1) {
+                const bulkUrl = `https://discord.com/api/v10/channels/${channelId}/messages/bulk-delete`;
+                const bulkRes = await fetch(bulkUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bot ${platform.token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ messages: messageIds })
+                });
+                if (!bulkRes.ok) {
+                    for (const id of messageIds) {
+                        await deleteMessage(platform, channelId, id);
+                    }
+                }
+            }
+            else {
+                for (const id of messageIds) {
+                    await deleteMessage(platform, channelId, id);
+                }
+            }
+            remaining -= messageIds.length;
+            if (messages.length < fetchLimit)
+                break;
+            await new Promise(r => setTimeout(r, 1000)); // Delay to avoid strict rate limiting
+        }
+    }
+    catch (error) {
+        console.error(`[${platform.name} API] Error purging messages:`, error);
+    }
+}
 // State management for persistent status messages
 const stateFile = path.join(__dirname, '..', 'data', 'state.json');
 let messageState = {};
@@ -198,6 +253,30 @@ function connectGateway(platform) {
                     return;
                 }
             }
+            if (message.content.startsWith('!w purge')) {
+                const parts = message.content.split(' ');
+                let amount = parseInt(parts[2] || '') || parseInt(parts[1] || ''); // Support "!w purge 50" or "!w purge 1-100" meaning !w purge <num>
+                if (!amount || amount < 1)
+                    amount = 10;
+                if (amount > 500)
+                    amount = 500;
+                await purgeMessages(platform, message.channel_id, amount + 1); // +1 to include the purge command itself
+                return;
+            }
+            if (message.content.startsWith('!w graph')) {
+                const parts = message.content.split(' ');
+                const state = parts[2]?.toLowerCase() === 'on' || parts[1]?.toLowerCase() === 'on';
+                const stateFile = path.join(__dirname, '..', 'data', 'graphState.json');
+                try {
+                    fs.writeFileSync(stateFile, JSON.stringify({ showGlobalGraph: state }));
+                }
+                catch (e) {
+                    console.error('[App] Failed to save graph state:', e);
+                }
+                await sendMessage(platform, message.channel_id, { content: `✅ Global graphs are now turned **${state ? 'ON' : 'OFF'}**.` });
+                await deleteMessage(platform, message.channel_id, message.id);
+                return;
+            }
             const responseText = await commandHandler.handleMessage(message.content, {
                 reply: async (payload) => {
                     const id = await sendMessage(platform, message.channel_id, payload);
@@ -208,6 +287,9 @@ function connectGateway(platform) {
                 },
                 deleteReply: async (messageId) => {
                     await deleteMessage(platform, message.channel_id, messageId);
+                },
+                deleteCommandMessage: async () => {
+                    await deleteMessage(platform, message.channel_id, message.id);
                 }
             }, poller);
             if (responseText) {

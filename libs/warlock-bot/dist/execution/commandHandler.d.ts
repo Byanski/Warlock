@@ -3,6 +3,7 @@ export interface CommandCallbacks {
     reply: (payload: any) => Promise<string | undefined>;
     editReply: (messageId: string, payload: any) => Promise<void>;
     deleteReply: (messageId: string) => Promise<void>;
+    deleteCommandMessage?: () => Promise<void>;
 }
 export declare class CommandHandler {
     private client;
